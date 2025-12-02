@@ -46,9 +46,13 @@ class ArmController(Node):
         self.last_gripper_cmd = None # 存储为 float 值
         self.joint_positions = []
 
-        self.get_logger().info("✅ 节点已启动 (严格模式)")
-        self.get_logger().info("ℹ️  Arm 控制: 使用 JointGroupCommand ('arm')")
-        self.get_logger().info("ℹ️  Gripper 控制: 使用 JointSingleCommand ('gripper')")
+        self.get_logger().info("Arm controller node initilized")
+        self.get_logger().info("Arm Control: JointGroupCommand ('arm')")
+        self.get_logger().info("Gripper Control: JointSingleCommand ('gripper')")
+
+        self.get_logger().info("MOVE to default position")
+        self.move_to_default_position()
+
 
     def cb_states(self, msg):
         """解析关节状态"""
@@ -86,6 +90,15 @@ class ArmController(Node):
 
         # 打印调试信息
         # print(f"Current Joints: {self.joint_positions}")
+
+    def move_to_default_position(self):
+        """移动到默认位置"""
+        default_position = [0.0, -0.3, 0.8, 1.0]
+        msg = JointGroupCommand()
+        msg.name = "arm"
+        msg.cmd = default_position
+        self.pub_arm.publish(msg)
+        self.get_logger().info(f"移动到默认位置: {default_position}")
 
 def main():
     rclpy.init()
