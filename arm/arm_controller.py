@@ -50,8 +50,8 @@ class ArmController(Node):
         self.get_logger().info("Arm Control: JointGroupCommand ('arm')")
         self.get_logger().info("Gripper Control: JointSingleCommand ('gripper')")
 
-        self.get_logger().info("MOVE to default position")
         self.move_to_default_position()
+        self.get_logger().info("MOVED to default position")
 
 
     def cb_states(self, msg):
@@ -93,7 +93,7 @@ class ArmController(Node):
 
     def move_to_default_position(self):
         """移动到默认位置"""
-        default_position = [0.0, -0.3, 0.8, 1.0]
+        default_position = [1.0, 0.0, 1.5, 1.0]
         msg = JointGroupCommand()
         msg.name = "arm"
         msg.cmd = default_position
