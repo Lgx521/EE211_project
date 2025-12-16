@@ -92,7 +92,7 @@ class ArmController(Node):
 
     def move_to_default_position(self):
         """移动到默认位置"""
-        default_position = [0.0, -0.3, 1.57, -0.5]
+        default_position = [1.57, -0.3, 1.57, -0.5]
         # default_position = [1.57, -0.6, 0.8, 1.0]
         msg = JointGroupCommand()
         msg.name = "arm"

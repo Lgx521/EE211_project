@@ -12,7 +12,7 @@ ROS2 红绿灯检测节点（trafficlight_dection2.py）
 
 快速使用：
 1) 安装依赖（在 ROS2 环境中）：
-   pip install ultralytics opencv-python numpy
+   pip install ultralytics opencv-pyeothon numpy
    sudo apt-get install ros-$ROS_DISTRO-cv-bridge
 
 2) 运行（默认订阅 /camera/camera/color/image_raw）：
