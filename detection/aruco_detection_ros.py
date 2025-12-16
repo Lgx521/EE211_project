@@ -17,7 +17,7 @@ class ArucoDetectorROS2(Node):
         super().__init__('aruco_detector_node')
 
         # --- Parameters ---
-        self.declare_parameter("marker_size", 0.035)
+        self.declare_parameter("marker_size", 0.03)
         self.declare_parameter("aruco_dictionary_name", "DICT_5X5_250")
         # 订阅的话题名称
         self.declare_parameter("image_topic", "/camera/camera/color/image_raw")

@@ -32,8 +32,11 @@ ROS2 红绿灯检测节点（trafficlight_dection.py）
 可调参数（ROS2 参数）：
 - model_path (string): 模型权重路径，默认自动搜索 ~/Yolo/runs/detect/*/weights/best.pt
 - conf_threshold (double): 置信度阈值，默认 0.5
-- input_image_topic (string): 输入图像话题，默认 /camera/image_raw（可按需改为 /camera/color/image_raw）
+- input_image_topic (string): 输入图像话题（也可用 image_topic 参数覆盖），默认 /camera/camera/color/image_raw
 - publish_annotated (bool): 是否发布标注图像，默认 True
+- imgsz (int): 推理输入尺寸，默认 640（越小越快）
+- publish_rate (double): 心跳发布频率Hz，默认 2.0（无图像时也会周期发布 UNKNOWN）
+- device (string): 推理设备，如 'cpu'、'0'（GPU0），默认自动
 
 发布话题：
 - traffic_light/image_annotated (sensor_msgs/Image)
@@ -49,13 +52,14 @@ import os
 import glob
 import time
 import json
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 from cv_bridge import CvBridge
+from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 import numpy as np
 import cv2
@@ -75,13 +79,29 @@ class TrafficLightDetectorNode(Node):
         # 声明参数并读取
         self.declare_parameter('model_path', self._auto_find_best())
         self.declare_parameter('conf_threshold', 0.5)
-        self.declare_parameter('input_image_topic', '/camera/image_raw')
+        self.declare_parameter('input_image_topic', '/camera/camera/color/image_raw')
         self.declare_parameter('publish_annotated', True)
+        # 兼容 aruco_detection_ros.py 的命名，支持 image_topic 参数
+        self.declare_parameter('image_topic', '/camera/camera/color/image_raw')
+        # 可选参数：推理输入尺寸与心跳发布频率
+        self.declare_parameter('imgsz', 640)
+        self.declare_parameter('publish_rate', 2.0)  # Hz，最低状态发布频率
+        self.declare_parameter('device', '')  # 例如 '0' 使用GPU0，留空为自动/CPU
 
         self.model_path: str = self.get_parameter('model_path').get_parameter_value().string_value
         self.conf_threshold: float = self.get_parameter('conf_threshold').get_parameter_value().double_value
         self.input_image_topic: str = self.get_parameter('input_image_topic').get_parameter_value().string_value
         self.publish_annotated: bool = self.get_parameter('publish_annotated').get_parameter_value().bool_value
+        # 其他参数
+        self.imgsz: int = int(self.get_parameter('imgsz').get_parameter_value().integer_value)
+        self.publish_rate: float = float(self.get_parameter('publish_rate').get_parameter_value().double_value)
+        self.device: str = self.get_parameter('device').get_parameter_value().string_value
+        # 兼容 aruco 节点的参数命名：若设置了 image_topic，则覆盖 input_image_topic
+        img_topic_param: str = self.get_parameter('image_topic').get_parameter_value().string_value
+        if img_topic_param:
+            if img_topic_param != self.input_image_topic:
+                self.get_logger().info(f"使用 image_topic 覆盖 input_image_topic -> {img_topic_param}")
+            self.input_image_topic = img_topic_param
 
         self.get_logger().info('===============================================')
         self.get_logger().info('Traffic Light Detection (ROS2) 节点启动')
@@ -110,7 +130,7 @@ class TrafficLightDetectorNode(Node):
 
         # CvBridge 与话题
         self.bridge = CvBridge()
-        self.image_sub = self.create_subscription(Image, self.input_image_topic, self.image_cb, 10)
+        self.image_sub = self.create_subscription(Image, self.input_image_topic, self.image_cb, qos_profile_sensor_data)
         self.ann_pub = self.create_publisher(Image, 'traffic_light/image_annotated', 10)
         self.status_pub = self.create_publisher(String, 'traffic_light/status', 10)
         self.boxes_pub = self.create_publisher(String, 'traffic_light/boxes', 10)
@@ -119,9 +139,21 @@ class TrafficLightDetectorNode(Node):
         self.frame_cnt = 0
         self.t0 = time.time()
         self.inf_hist: List[float] = []
+        self.last_status: str = 'UNKNOWN'
 
         # 动态参数回调
         self.add_on_set_parameters_callback(self._on_params_update)
+
+        # 订阅确认日志
+        self.get_logger().info(f"已订阅图像话题: {self.input_image_topic} (QoS: sensor_data)")
+
+        # 心跳与丢帧监控
+        self.last_image_time: Optional[float] = None
+        self._last_warn_time: float = 0.0
+        if self.publish_rate > 0:
+            self.timer = self.create_timer(max(0.05, 1.0 / self.publish_rate), self._heartbeat)
+        else:
+            self.timer = None
 
     def _auto_find_best(self) -> str:
         # 优先使用 ~/Yolo/runs/detect/*/weights/best.pt 中最新的
@@ -162,9 +194,15 @@ class TrafficLightDetectorNode(Node):
             self.get_logger().error(f'CvBridge 转换失败: {e}')
             return
 
+        # 记录最近一次收到图像的时间
+        self.last_image_time = time.time()
+
         t_start = time.time()
         try:
-            results = self.model.predict(frame, conf=self.conf_threshold, verbose=False)
+            predict_kwargs = dict(conf=self.conf_threshold, verbose=False, imgsz=self.imgsz)
+            if self.device:
+                predict_kwargs['device'] = self.device
+            results = self.model.predict(frame, **predict_kwargs)
         except Exception as e:
             self.get_logger().error(f'YOLO 推理失败: {e}')
             return
@@ -177,6 +215,7 @@ class TrafficLightDetectorNode(Node):
         if dets:
             best = max(dets, key=lambda d: d['confidence'])
             status = best['class'].upper()
+        self.last_status = status
         self.status_pub.publish(String(data=status))
 
         # 发布检测框 JSON
@@ -206,6 +245,22 @@ class TrafficLightDetectorNode(Node):
             avg_ms = float(np.mean(self.inf_hist)) if self.inf_hist else inf_ms
             self.get_logger().info(f'FPS: {fps:.2f} | Avg inference: {avg_ms:.1f} ms | Status: {status} | Dets: {len(dets)}')
             self.t0 = time.time()
+
+    def _heartbeat(self):
+        try:
+            now = time.time()
+            # 当长时间未收到图像时，周期性发布 UNKNOWN 并给出告警
+            stale = (self.last_image_time is None) or (now - self.last_image_time > max(1.0, 2.0))
+            if stale:
+                if now - self._last_warn_time > 2.0:
+                    self.get_logger().warn('尚未收到相机图像或图像中断，正在发布心跳 UNKNOWN...')
+                    self._last_warn_time = now
+                self.status_pub.publish(String(data='UNKNOWN'))
+            else:
+                # 正常收到图像时，也发布最近一次状态，保证一定频率的输出
+                self.status_pub.publish(String(data=self.last_status))
+        except Exception as e:
+            self.get_logger().warn(f'心跳任务异常: {e}')
 
     def _extract(self, result) -> List[Dict]:
         dets: List[Dict] = []
