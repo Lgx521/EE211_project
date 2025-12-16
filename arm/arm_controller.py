@@ -81,7 +81,6 @@ class ArmController(Node):
             self.pub_arm.publish(self.last_arm_cmd)
 
         # 2. 发送 Gripper 指令 (Single)
-        # ⚠️ 这里是避开 Config 缺陷的核心逻辑
         if self.last_gripper_cmd is not None:
             msg = JointSingleCommand()
             msg.name = "gripper"  # 必须匹配 config -> motors 下的名字
@@ -93,7 +92,7 @@ class ArmController(Node):
 
     def move_to_default_position(self):
         """移动到默认位置"""
-        default_position = [1.0, 0.0, 1.5, 1.0]
+        default_position = [0.0, -0.3, 0.8, 1.0]
         msg = JointGroupCommand()
         msg.name = "arm"
         msg.cmd = default_position
