@@ -15,11 +15,13 @@ setup(
     zip_safe=True,
     maintainer='tony',
     maintainer_email='shengzhegan04@gmail.com',
-    description='TODO: Package description',
-    license='TODO: License declaration',
+    description='Planning package for EE211_project',
+    license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'read_pose = read_pose:main',
+            'navigation = navigation:main',
         ],
     },
 )

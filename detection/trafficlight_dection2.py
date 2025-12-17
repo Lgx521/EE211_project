@@ -56,7 +56,7 @@ class TrafficLightDetector2(Node):
 
         # 参数（对齐 aruco_detection_ros.py 的命名风格）
         self.declare_parameter('image_topic', '/camera/camera/color/image_raw')
-        self.declare_parameter('model_path', self._auto_find_best())
+        self.declare_parameter('model_path', '/home/tony/ros2_ws/src/EE211_project/detection/best_V8m.pt')
         self.declare_parameter('conf_threshold', 0.5)
         self.declare_parameter('publish_annotated', True)
 

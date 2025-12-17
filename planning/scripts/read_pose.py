@@ -12,18 +12,13 @@ class CurrentPosePrinter(Node):
             '/amcl_pose',
             self.pose_callback,
             10)
-        self.got_pose = False
 
     def pose_callback(self, msg):
-        if self.got_pose:
-            return
         pos = msg.pose.pose.position
         ori = msg.pose.pose.orientation
         self.get_logger().info(
-            f"x={pos.x:.3f}, y={pos.y:.3f}, z={ori.z:.6f}, w={ori.w:.6f}")
+            f"Current: x={pos.x:.3f}, y={pos.y:.3f}, z={ori.z:.6f}, w={ori.w:.6f}")
         print(f"{pos.x:.4f}, {pos.y:.4f}, {ori.z:.6f}, {ori.w:.6f}")
-        self.got_pose = True
-        rclpy.shutdown()
 
 def main(args=None):
     rclpy.init(args=args)
