@@ -12,71 +12,88 @@ from tf2_geometry_msgs import do_transform_pose
 
 class PX100Kinematics:
     def __init__(self):
-        # 机械臂连杆长度
-        self.L1 = 0.0445
-        self.L2 = 0.100
-        self.L3 = 0.100
-        self.L4 = 0.110 
+        # 根据CAD图纸修正的参数（单位：米）
+        self.L1 = 0.08945  # 基座高度：89.45mm
+        self.L2 = 0.10055  # 肩到肘：100.55mm
+        self.L3 = 0.100    # 肘到腕：100mm
+        self.L4 = 0.12915  # 腕到夹爪末端：129.15mm 
         
-        # [参数] 水平方向回退距离
-        # 水平抓取时，这个值决定了夹爪尖端距离物体中心的距离
-        self.GRASP_X_OFFSET = 0.035 
+        # 水平回退距离（几何IK使用）
+        self.GRASP_X_OFFSET = 0.02
+
+        # 优先使用 robotics-toolbox 的数值IK（按用户文档方法）
+        self._use_rtb = False
+        try:
+            import roboticstoolbox as rtb
+            from spatialmath import SE3
+            self._rtb = rtb
+            self._SE3 = SE3
+            # 内置 PX-100 模型
+            self._robot = rtb.models.px100()
+            # ee_gripper_link 的索引（与示例一致）
+            self._ee_index = 11
+            self._use_rtb = True
+            print("[IK] 使用 robotics-toolbox 数值IK (ikine_LM)")
+        except Exception as e:
+            print(f"[IK] 未检测到 robotics-toolbox，回退到几何IK。原因: {e}")
 
     def solve_ik(self, x, y, z):
-        """
-        只计算水平抓取 (Pitch = 0) 的逆运动学解
-        """
-        # 1. 腰部角度 (Waist)
+        # 若可用，走 robotics-toolbox 的方法
+        if self._use_rtb:
+            try:
+                # 初始猜测让腰关节面向目标，利于收敛
+                waist = math.atan2(y, x)
+                q0 = [waist, -0.5, 1.0, -0.5]
+                # 仅约束位置 + 工具俯仰（Ry），其余自由
+                T = self._SE3(x, y, z)
+                mask = [1, 1, 1, 0, 1, 0]
+                sol = self._robot.ikine_LM(T, q0=q0, end=self._robot[self._ee_index], mask=mask)
+                if sol.success:
+                    return list(sol.q)
+                else:
+                    print("[IK-rtb] 求解失败，回退到几何IK")
+            except Exception as e:
+                print(f"[IK-rtb] 异常: {e}，回退到几何IK")
+        
+        # 几何IK回退：保持历史逻辑（水平抓取）
         waist = math.atan2(y, x)
-        
-        # 2. 坐标转换 (从 Base 到 Shoulder)
-        # 水平距离 r
         r_target_raw = math.sqrt(x**2 + y**2)
-        r_target = r_target_raw - self.GRASP_X_OFFSET # 给夹爪留出空间
-        
-        # 垂直高度 z_w (相对于 Shoulder 关节)
+        r_target = r_target_raw - self.GRASP_X_OFFSET
         z_w = z - self.L1 
-
-        # 3. 计算关节角
-        # --- 强制策略: 仅水平抓取 (Pitch = 0) ---
-        # 此时 Wrist 的位置很好算：就在目标点后方 L4 处
         r_wrist = r_target - self.L4
         z_wrist = z_w
-        
-        # 调用 2-Link IK 解算 Shoulder 和 Elbow
+        if r_wrist < 0.01:
+            print(f"[IK 警告] 目标太近! (Dist={r_target_raw:.3f}), 需要至少 {self.L4 + self.GRASP_X_OFFSET + 0.02:.3f}m")
+            return None
         joints = self._compute_2link_ik(r_wrist, z_wrist, pitch_goal=0.0)
-        
         if joints:
             return [waist] + joints
-        
-        # 如果水平够不到，直接返回失败，绝不尝试 30 度
         return None
 
     def _compute_2link_ik(self, r, z, pitch_goal):
         d = math.sqrt(r**2 + z**2)
-        # 物理限位检查
-        if d > (self.L2 + self.L3) or d < 0.02: return None
+        # 检查最大臂展
+        if d > (self.L2 + self.L3): 
+            # print("[IK] 太远够不着")
+            return None
+        # 检查最小折叠 (防止自相交)
+        if d < 0.05: return None
 
         alpha = math.atan2(z, r)
         try:
-            # 余弦定理算 Elbow
             cos_beta = (self.L2**2 + d**2 - self.L3**2) / (2 * self.L2 * d)
             if abs(cos_beta) > 1.0: return None
             beta = math.acos(cos_beta)
-            theta_shoulder = alpha + beta # Elbow Up 构型
+            # 使用 alpha - beta 让机械臂向下弯曲（肘部向下）
+            theta_shoulder = alpha - beta 
 
-            # 余弦定理算 Shoulder
             cos_gamma = (self.L2**2 + self.L3**2 - d**2) / (2 * self.L2 * self.L3)
             if abs(cos_gamma) > 1.0: return None
             gamma = math.acos(cos_gamma)
 
             theta_elbow = -1 * (math.pi - gamma)
-            
-            # 关键：Pitch = Shoulder + Elbow + Wrist
-            # 所以 Wrist = Pitch_Goal - Shoulder - Elbow
             theta_wrist = pitch_goal - theta_shoulder - theta_elbow
 
-            # 关节角限位
             if not (-2.0 < theta_shoulder < 2.0): return None
             if not (-2.4 < theta_elbow < 2.4): return None
             
@@ -103,11 +120,11 @@ class ArucoGraspNode(Node):
         self.wait_ticks = 0
         self.timer = self.create_timer(0.5, self.control_loop)
         
-        # --- 高度配置 ---
-        self.HOVER_ADD_Z = 0.03  # 悬停高度: 比物体高 6cm
-        self.GRASP_ADD_Z = -0.025 # 抓取高度: 比物体低 2.5cm (下压)
+        # 高度配置
+        self.HOVER_ADD_Z = 0.02
+        self.GRASP_ADD_Z = -0.02 
 
-        self.get_logger().info("✅ 节点启动: 强制水平抓取 (Pitch=0)")
+        self.get_logger().info("✅ 节点启动: 已修复近距离IK翻转BUG")
 
     def cb_poses(self, msg: PoseArray):
         if self.state != "SEARCHING": return
@@ -147,17 +164,12 @@ class ArucoGraspNode(Node):
             pass 
 
         elif self.state == "PREPARE_GRASP":
-            self.get_logger().info("1. 准备姿态：抬起手臂")
+            self.get_logger().info("1. 准备：抬起手臂")
             self.send_gripper(1.5) 
-            
-            # 先移动到一个安全的高位 (Sleep 姿态的变体，抬高一点)
-            # 防止从低处直接铲过去
             self.send_arm([0.0, -0.6, 1.2, -0.5]) 
-            
             self.state = "MOVE_HOVER" 
             self.wait_ticks = 4 
 
-        # --- 步骤 2: 保持水平姿态，移动到物体上方 ---
         elif self.state == "MOVE_HOVER":
             if not self.target_pose_base: 
                 self.state = "SEARCHING"
@@ -167,10 +179,12 @@ class ArucoGraspNode(Node):
             y = self.target_pose_base.position.y
             z_aruco = self.target_pose_base.position.z
 
-            # 悬停目标 Z
             z_target = z_aruco + self.HOVER_ADD_Z
-
-            self.get_logger().info(f"2. 水平悬停 (Pitch=0, Z={z_target:.3f})")
+            
+            # Debug: 打印距离
+            dist = math.sqrt(x**2 + y**2)
+            self.get_logger().info(f"2. 悬停 (Z={z_target:.3f}, Dist={dist:.3f})")
+            
             joints = self.ik_solver.solve_ik(x, y, z_target)
             
             if joints:
@@ -178,19 +192,17 @@ class ArucoGraspNode(Node):
                 self.state = "MOVE_DOWN" 
                 self.wait_ticks = 5     
             else:
-                self.get_logger().error("❌ 悬停点 IK 无解 (可能太远或太高)")
+                self.get_logger().error("❌ 悬停 IK 失败 (物体可能太近)")
                 self.state = "SEARCHING"
 
-        # --- 步骤 3: 保持水平姿态，垂直下降 ---
         elif self.state == "MOVE_DOWN":
             x = self.target_pose_base.position.x
             y = self.target_pose_base.position.y
             z_aruco = self.target_pose_base.position.z
 
-            # 抓取目标 Z
             z_target = z_aruco + self.GRASP_ADD_Z
 
-            self.get_logger().info(f"3. 垂直下落 (Pitch=0, Z={z_target:.3f})")
+            self.get_logger().info(f"3. 下落 (Z={z_target:.3f})")
             joints = self.ik_solver.solve_ik(x, y, z_target)
 
             if joints:
@@ -198,23 +210,23 @@ class ArucoGraspNode(Node):
                 self.state = "CLOSE"
                 self.wait_ticks = 4
             else:
-                self.get_logger().error("❌ 下落点 IK 无解 (可能太低)")
+                self.get_logger().error("❌ 下落 IK 失败 (物体太近或太低)")
                 self.state = "SEARCHING"
 
         elif self.state == "CLOSE":
-            self.get_logger().info("4. 闭合夹爪")
+            self.get_logger().info("4. 闭合")
             self.send_gripper(0.65) 
             self.state = "RETRACT"
             self.wait_ticks = 3 
 
         elif self.state == "RETRACT":
-            self.get_logger().info("5. 抬起收回")
+            self.get_logger().info("5. 收回")
             self.send_arm([1.57, -0.3, 1.57, -1.3])
             self.state = "DONE"
             self.wait_ticks = 4
 
         elif self.state == "DONE":
-            self.get_logger().info("✅ 抓取完成")
+            self.get_logger().info("✅ 完成")
             # self.state = "SEARCHING"
 
 def main():
