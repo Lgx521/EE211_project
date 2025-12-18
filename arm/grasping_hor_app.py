@@ -12,94 +12,32 @@ from tf2_geometry_msgs import do_transform_pose
 
 class PX100Kinematics:
     def __init__(self):
-        # 根据CAD图纸修正的参数（单位：米）
-        self.L1 = 0.08945  # 基座高度：89.45mm
-        self.L2 = 0.10055  # 肩到肘：100.55mm
-        self.L3 = 0.100    # 肘到腕：100mm
-        self.L4 = 0.12915  # 腕到夹爪末端：129.15mm 
-        
-        # 水平回退距离（几何IK使用）
-        self.GRASP_X_OFFSET = 0.02
+        # 使用 robotics-toolbox 的 px100 内置模型
+        import roboticstoolbox as rtb
+        from spatialmath import SE3
+        self._rtb = rtb
+        self._SE3 = SE3
+        self._robot = rtb.models.px100()
+        self._ee_index = 11
+        # 保存上一次解，保证下落时姿态连续（保持水平，yaw不跳变）
+        self._last_q = None
 
-        # 优先使用 robotics-toolbox 的数值IK（按用户文档方法）
-        self._use_rtb = False
-        try:
-            import roboticstoolbox as rtb
-            from spatialmath import SE3
-            self._rtb = rtb
-            self._SE3 = SE3
-            # 内置 PX-100 模型
-            self._robot = rtb.models.px100()
-            # ee_gripper_link 的索引（与示例一致）
-            self._ee_index = 11
-            self._use_rtb = True
-            print("[IK] 使用 robotics-toolbox 数值IK (ikine_LM)")
-        except Exception as e:
-            print(f"[IK] 未检测到 robotics-toolbox，回退到几何IK。原因: {e}")
-
-    def solve_ik(self, x, y, z):
-        # 若可用，走 robotics-toolbox 的方法
-        if self._use_rtb:
-            try:
-                # 初始猜测让腰关节面向目标，利于收敛
-                waist = math.atan2(y, x)
-                q0 = [waist, -0.5, 1.0, -0.5]
-                # 仅约束位置 + 工具俯仰（Ry），其余自由
-                T = self._SE3(x, y, z)
-                mask = [1, 1, 1, 0, 1, 0]
-                sol = self._robot.ikine_LM(T, q0=q0, end=self._robot[self._ee_index], mask=mask)
-                if sol.success:
-                    return list(sol.q)
-                else:
-                    print("[IK-rtb] 求解失败，回退到几何IK")
-            except Exception as e:
-                print(f"[IK-rtb] 异常: {e}，回退到几何IK")
-        
-        # 几何IK回退：保持历史逻辑（水平抓取）
-        waist = math.atan2(y, x)
-        r_target_raw = math.sqrt(x**2 + y**2)
-        r_target = r_target_raw - self.GRASP_X_OFFSET
-        z_w = z - self.L1 
-        r_wrist = r_target - self.L4
-        z_wrist = z_w
-        if r_wrist < 0.01:
-            print(f"[IK 警告] 目标太近! (Dist={r_target_raw:.3f}), 需要至少 {self.L4 + self.GRASP_X_OFFSET + 0.02:.3f}m")
-            return None
-        joints = self._compute_2link_ik(r_wrist, z_wrist, pitch_goal=0.0)
-        if joints:
-            return [waist] + joints
+    def solve_ik(self, x, y, z, keep_level=True):
+        # 保持夹爪水平（pitch=0），只约束 XYZ + Ry；yaw/roll 不约束
+        pitch = 0.0 if keep_level else 0.0
+        T = self._SE3(x, y, z) * self._SE3.Ry(pitch)
+        mask = [1, 1, 1, 0, 1, 0]
+        if self._last_q is not None:
+            q0 = list(self._last_q)
+        else:
+            yaw0 = math.atan2(y, x)
+            q0 = [yaw0, -0.5, 1.0, -0.5]
+        sol = self._robot.ikine_LM(T, q0=q0, end=self._robot[self._ee_index], mask=mask)
+        if sol.success:
+            self._last_q = sol.q
+            return list(sol.q)
         return None
 
-    def _compute_2link_ik(self, r, z, pitch_goal):
-        d = math.sqrt(r**2 + z**2)
-        # 检查最大臂展
-        if d > (self.L2 + self.L3): 
-            # print("[IK] 太远够不着")
-            return None
-        # 检查最小折叠 (防止自相交)
-        if d < 0.05: return None
-
-        alpha = math.atan2(z, r)
-        try:
-            cos_beta = (self.L2**2 + d**2 - self.L3**2) / (2 * self.L2 * d)
-            if abs(cos_beta) > 1.0: return None
-            beta = math.acos(cos_beta)
-            # 使用 alpha - beta 让机械臂向下弯曲（肘部向下）
-            theta_shoulder = alpha - beta 
-
-            cos_gamma = (self.L2**2 + self.L3**2 - d**2) / (2 * self.L2 * self.L3)
-            if abs(cos_gamma) > 1.0: return None
-            gamma = math.acos(cos_gamma)
-
-            theta_elbow = -1 * (math.pi - gamma)
-            theta_wrist = pitch_goal - theta_shoulder - theta_elbow
-
-            if not (-2.0 < theta_shoulder < 2.0): return None
-            if not (-2.4 < theta_elbow < 2.4): return None
-            
-            return [theta_shoulder, theta_elbow, theta_wrist]
-        except ValueError:
-            return None
 
 class ArucoGraspNode(Node):
     def __init__(self):
