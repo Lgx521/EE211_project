@@ -5,6 +5,7 @@ from rclpy.node import Node
 import math
 
 from interbotix_xs_msgs.msg import JointGroupCommand, JointSingleCommand
+from std_msgs.msg import String
 
 class PlaceBoxNode(Node):
     def __init__(self):
@@ -12,6 +13,7 @@ class PlaceBoxNode(Node):
         # Publishers
         self.pub_arm = self.create_publisher(JointGroupCommand, '/px100/commands/joint_group', 10)
         self.pub_gripper = self.create_publisher(JointSingleCommand, '/px100/commands/joint_single', 10)
+        self.pub_place_success = self.create_publisher(String, '/place/success', 10)
 
         # Simple state machine
         self.state = 'MOVE_OUT'
@@ -32,6 +34,13 @@ class PlaceBoxNode(Node):
         msg.name = 'gripper'
         msg.cmd = float(val)
         self.pub_gripper.publish(msg)
+
+    def publish_place_success(self):
+        """发布放置成功话题"""
+        msg = String()
+        msg.data = "place_success"
+        self.pub_place_success.publish(msg)
+        self.get_logger().info("✅ 发布放置成功话题: /place/success")
 
     def loop(self):
         if self.wait_ticks > 0:
@@ -55,6 +64,8 @@ class PlaceBoxNode(Node):
 
         elif self.state == 'DONE':
             self.get_logger().info('Done. Exiting...')
+            # 发布放置成功话题
+            self.publish_place_success()
             # Cleanly shutdown
             self.destroy_node()
             rclpy.shutdown()

@@ -31,12 +31,13 @@ import os
 import glob
 import time
 import json
-from typing import List, Dict
+from typing import List, Dict, Deque
+from collections import deque
 
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from std_msgs.msg import String
+from std_msgs.msg import String, Bool
 from cv_bridge import CvBridge
 
 import numpy as np
@@ -59,17 +60,27 @@ class TrafficLightDetector2(Node):
         self.declare_parameter('model_path', '/home/tony/ros2_ws/src/EE211_project/detection/best1218.pt')
         self.declare_parameter('conf_threshold', 0.5)
         self.declare_parameter('publish_annotated', True)
+        
+        # 新增参数：滤波相关
+        self.declare_parameter('filter_window_size', 5)  # 滤波窗口大小
+        self.declare_parameter('stop_threshold', 60)    # 停止阈值百分比
 
         self.image_topic: str = self.get_parameter('image_topic').get_parameter_value().string_value
         self.model_path: str = self.get_parameter('model_path').get_parameter_value().string_value
         self.conf_threshold: float = self.get_parameter('conf_threshold').get_parameter_value().double_value
         self.publish_annotated: bool = self.get_parameter('publish_annotated').get_parameter_value().bool_value
+        
+        # 新增滤波参数
+        self.filter_window_size: int = self.get_parameter('filter_window_size').get_parameter_value().integer_value
+        self.stop_threshold: int = self.get_parameter('stop_threshold').get_parameter_value().integer_value
 
         self.get_logger().info('================ Traffic Light Detection v2 ================')
         self.get_logger().info(f'image_topic: {self.image_topic}')
         self.get_logger().info(f'model_path: {self.model_path}')
         self.get_logger().info(f'conf_threshold: {self.conf_threshold}')
         self.get_logger().info(f'publish_annotated: {self.publish_annotated}')
+        self.get_logger().info(f'filter_window_size: {self.filter_window_size}')
+        self.get_logger().info(f'stop_threshold: {self.stop_threshold}')
         self.get_logger().info('===========================================================')
 
         if not _UL_OK:
@@ -94,11 +105,18 @@ class TrafficLightDetector2(Node):
         self.ann_pub = self.create_publisher(Image, 'traffic_light/image_annotated', 10)
         self.status_pub = self.create_publisher(String, 'traffic_light/status', 10)
         self.boxes_pub = self.create_publisher(String, 'traffic_light/boxes', 10)
+        
+        # 新增：发布小车停止控制话题
+        self.stop_control_pub = self.create_publisher(Bool, 'traffic_light/stop_control', 10)
 
         # 统计
         self.frame_cnt = 0
         self.t0 = time.time()
         self.inf_hist: List[float] = []
+        
+        # 滤波相关变量
+        self.detection_history: Deque[bool] = deque(maxlen=self.filter_window_size)  # 检测历史
+        self.current_stop_signal = False  # 当前停止信号
 
     def _auto_find_best(self) -> str:
         home = os.path.expanduser('~')
@@ -107,6 +125,67 @@ class TrafficLightDetector2(Node):
             candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
             return candidates[0]
         return 'best.pt'
+
+    def _apply_filter(self, should_stop: bool) -> bool:
+        """
+        应用滤波函数，防止偶发的错误识别导致小车停止
+        
+        Args:
+            should_stop: 当前检测结果，True表示检测到红灯/STOP标志，False表示正常
+            
+        Returns:
+            bool: 滤波后的结果，True表示需要停止，False表示可以继续
+        """
+        # 将当前检测结果添加到历史记录中
+        self.detection_history.append(should_stop)
+        
+        # 如果历史记录为空，直接返回 False
+        if not self.detection_history:
+            return False
+
+        # 如果历史记录还不够填充窗口，直接返回当前结果
+        if len(self.detection_history) < self.filter_window_size:
+            return should_stop
+            
+        # 计算历史记录中"停止"信号的比例
+        stop_count = sum(self.detection_history)
+        total_count = len(self.detection_history)
+        stop_ratio = stop_count / total_count
+        
+        # 如果停止信号的比例超过阈值，则认为需要停止
+        filtered_result = stop_ratio >= (self.stop_threshold / 100.0)
+        
+        self.get_logger().debug(f'滤波详情: 历史={list(self.detection_history)}, 停止比例={stop_ratio:.2f}, 阈值={self.stop_threshold/100.0}, 结果={filtered_result}')
+        
+        return filtered_result
+
+    def _should_stop_traffic(self, status: str, dets: List[Dict]) -> bool:
+        """
+        根据检测结果判断是否应该停止小车
+        
+        Args:
+            status: 当前检测状态（RED/GREEN/YELLOW/UNKNOWN等）
+            dets: 所有检测结果列表
+            
+        Returns:
+            bool: True表示应该停止，False表示可以继续
+        """
+        # 如果检测到红灯或STOP标志，应该停止
+        if 'RED' in status:
+            return True
+        
+        # 如果是 UNKNOWN 状态，不应该停止
+        if status == 'UNKNOWN':
+            return False
+            
+        # 检查是否有STOP标志（不区分大小写）
+        for det in dets:
+            class_name = det['class'].upper()
+            if 'STOP' in class_name:
+                return True
+                
+        # 其他情况（绿灯、黄灯、未知等）不需要停止
+        return False
 
     def image_cb(self, msg: Image) -> None:
         try:
@@ -131,6 +210,14 @@ class TrafficLightDetector2(Node):
             best = max(dets, key=lambda d: d['confidence'])
             status = best['class'].upper()
         self.status_pub.publish(String(data=status))
+        
+        # 新增：发布停止控制信号
+        should_stop = self._should_stop_traffic(status, dets)
+        filtered_stop_signal = self._apply_filter(should_stop)
+        
+        # 发布滤波后的停止信号
+        self.stop_control_pub.publish(Bool(data=filtered_stop_signal))
+        self.current_stop_signal = filtered_stop_signal
 
         # 发布检测框 JSON
         try:
@@ -157,7 +244,8 @@ class TrafficLightDetector2(Node):
             dt = time.time() - self.t0
             fps = 30.0 / dt if dt > 0 else 0.0
             avg_ms = float(np.mean(self.inf_hist)) if self.inf_hist else inf_ms
-            self.get_logger().info(f'FPS: {fps:.2f} | Avg inference: {avg_ms:.1f} ms | Status: {status} | Dets: {len(dets)}')
+            stop_signal_str = "STOP" if self.current_stop_signal else "GO"
+            self.get_logger().info(f'FPS: {fps:.2f} | Avg inference: {avg_ms:.1f} ms | Status: {status} | Dets: {len(dets)} | Control: {stop_signal_str}')
             self.t0 = time.time()
 
     def _extract(self, result) -> List[Dict]:
