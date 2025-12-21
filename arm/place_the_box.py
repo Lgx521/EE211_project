@@ -41,7 +41,7 @@ class PlaceBoxNode(Node):
         if self.state == 'MOVE_OUT':
             # A safe forward "place" pose; gripper level (shoulder+elbow+wrist≈0)
             # [waist, shoulder, elbow, wrist]
-            place_pose = [0.0, -0.4, 1.1, -0.7]
+            place_pose = [-1.57, -0.4, 1.1, -0.7]
             self.get_logger().info('Extending arm to place pose...')
             self.send_arm(place_pose)
             self.state = 'OPEN'
