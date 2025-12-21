@@ -50,7 +50,7 @@ class ArucoGraspNode(Node):
         self.pub_arm = self.create_publisher(JointGroupCommand, "/px100/commands/joint_group", 10)
         self.pub_gripper = self.create_publisher(JointSingleCommand, "/px100/commands/joint_single", 10)
         # 发布抓取成功话题
-        self.pub_grasp_success = self.create_publisher(Bool, "/grasp_success", 10)
+        self.pub_grasp_success = self.create_publisher(Bool, "/grasp/success", 10)
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
