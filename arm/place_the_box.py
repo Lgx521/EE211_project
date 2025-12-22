@@ -76,7 +76,7 @@ class PlaceBoxNode(Node):
 
         elif self.state == 'OPEN':
             self.get_logger().info('Opening gripper to release object...')
-            self.send_gripper(1.5)  # fully open
+            self.send_gripper(1.57)  # fully open
             self.state = 'DONE'
             self.wait_ticks = 4  # short wait then exit
 

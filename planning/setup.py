@@ -27,6 +27,7 @@ setup(
             'navigation = navigation:main',
             'nav1 = nav1:main',
             'nav2 = nav2:main',
+            'nav3 = nav3:main',
         ],
     },
 )

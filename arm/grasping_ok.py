@@ -31,15 +31,51 @@ class PX100Kinematics:
         pitch = 0.0 if keep_level else 0.0
         T = self._SE3(x, y, z) * self._SE3.Ry(pitch)
         mask = [1, 1, 1, 0, 1, 0]
+        
+        # 准备多组初始猜测
+        yaw0 = math.atan2(y, x)
+        dist = math.sqrt(x**2 + y**2)
+        
+        # 根据目标高度和距离，提供更智能的初始猜测
+        initial_guesses = []
+        
+        # 首选：使用上一次的解（如果存在）
         if self._last_q is not None:
-            q0 = list(self._last_q)
-        else:
-            yaw0 = math.atan2(y, x)
-            q0 = [yaw0, -0.5, 1.0, -0.5]
-        sol = self._robot.ikine_LM(T, q0=q0, end=self._robot[self._ee_index], mask=mask)
-        if sol.success:
-            self._last_q = sol.q
-            return list(sol.q)
+            initial_guesses.append(list(self._last_q))
+        
+        # 备选1：基于目标位置的智能猜测
+        # 对于较低的物体，肘部需要更弯曲
+        if z < 0.05:  # 物体很低
+            initial_guesses.append([yaw0, -0.2, 1.4, -1.2])
+        elif z < 0.1:  # 物体中等高度
+            initial_guesses.append([yaw0, -0.4, 1.2, -0.8])
+        else:  # 物体较高
+            initial_guesses.append([yaw0, -0.5, 1.0, -0.5])
+        
+        # 备选2：标准姿态
+        initial_guesses.append([yaw0, -0.5, 1.0, -0.5])
+        
+        # 备选3：更激进的姿态（用于极端情况）
+        initial_guesses.append([yaw0, 0.0, 1.5, -1.5])
+        
+        # 尝试每一组初始猜测
+        for i, q0 in enumerate(initial_guesses):
+            sol = self._robot.ikine_LM(
+                T, 
+                q0=q0, 
+                end=self._robot[self._ee_index], 
+                mask=mask,
+                ilimit=500,      # 增加迭代次数限制（默认约100）
+                slimit=200,      # 增加搜索步数限制
+                tol=1e-5         # 稍微放宽收敛容差（默认1e-6）
+            )
+            if sol.success:
+                self._last_q = sol.q
+                if i > 0:  # 如果不是第一次尝试就成功了
+                    print(f"✓ IK求解成功（尝试#{i+1}）")
+                return list(sol.q)
+        
+        # 所有尝试都失败
         return None
 
 
