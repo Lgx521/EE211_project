@@ -55,10 +55,15 @@ class ArucoGraspNode(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.sub_poses = self.create_subscription(PoseArray, "/aruco_detector/marker_poses", self.cb_poses, 10)
+        
+        # 订阅启动话题
+        self.sub_start = self.create_subscription(Bool, "/grasp/start", self.cb_start, 10)
 
         self.ik_solver = PX100Kinematics()
         
-        self.state = "SEARCHING"
+        # 等待启动信号
+        self.started = False
+        self.state = "WAITING_START"
         self.target_pose_base = None
         self.stable_counter = 0
         self.wait_ticks = 0
@@ -71,9 +76,20 @@ class ArucoGraspNode(Node):
         # ArUco检测进程
         self.aruco_process = None
 
-        self.get_logger().info("✅ 节点启动: 已修复近距离IK翻转BUG")
+        self.get_logger().info("✅ 节点启动: 等待 /grasp/start 话题中的 True 指令...")
+
+    def cb_start(self, msg: Bool):
+        """接收启动信号"""
+        if msg.data and not self.started:
+            self.get_logger().info("🚀 收到启动信号，开始执行抓取任务...")
+            self.started = True
+            # 执行抓取前准备
+            self.setup_before_grasp()
+            # 切换到搜索状态
+            self.state = "SEARCHING"
 
     def cb_poses(self, msg: PoseArray):
+        if not self.started: return  # 未收到启动信号，不处理
         if self.state != "SEARCHING": return
         if len(msg.poses) == 0: return
         try:
@@ -108,14 +124,14 @@ class ArucoGraspNode(Node):
         
         # 1. 云台转动到30度
         try:
-            cmd = 'ros2 topic pub --once /pan_tilt_cmd_deg pan_tilt_msgs/msg/PanTiltCmdDeg "{yaw: 0.0, pitch: 30.0, speed: 10}"'
+            cmd = 'ros2 topic pub --once /pan_tilt_cmd_deg pan_tilt_msgs/msg/PanTiltCmdDeg "{yaw: 0.0, pitch: 30.0, speed: 20}"'
             subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.get_logger().info("✅ 云台转动命令已发送: pitch=30°")
         except Exception as e:
             self.get_logger().error(f"❌ 云台转动失败: {e}")
         
         # 等待云台转动到位
-        time.sleep(5.0)
+        time.sleep(4.0)
         
         # 2. 启动ArUco检测脚本
         try:
@@ -161,7 +177,7 @@ class ArucoGraspNode(Node):
         
         # 2. 云台恢复到原位（pitch=0）
         try:
-            cmd = 'ros2 topic pub --once /pan_tilt_cmd_deg pan_tilt_msgs/msg/PanTiltCmdDeg "{yaw: 0.0, pitch: 0.0, speed: 10}"'
+            cmd = 'ros2 topic pub --once /pan_tilt_cmd_deg pan_tilt_msgs/msg/PanTiltCmdDeg "{yaw: 0.0, pitch: 0.0, speed: 20}"'
             subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.get_logger().info("✅ 云台恢复命令已发送: pitch=0°")
         except Exception as e:
@@ -178,7 +194,11 @@ class ArucoGraspNode(Node):
             self.wait_ticks -= 1
             return
 
-        if self.state == "SEARCHING":
+        if self.state == "WAITING_START":
+            # 等待启动信号，不执行任何操作
+            pass
+
+        elif self.state == "SEARCHING":
             pass 
 
         elif self.state == "PREPARE_GRASP":
@@ -257,10 +277,7 @@ def main():
     rclpy.init()
     node = ArucoGraspNode()
     
-    # 抓取前准备：云台转动 + ArUco检测启动
-    node.setup_before_grasp()
-    
-    # 运行主程序
+    # 运行主程序（等待 /grasp/start 话题）
     rclpy.spin(node)
     
     # 清理资源

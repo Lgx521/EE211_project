@@ -15,13 +15,27 @@ class PlaceBoxNode(Node):
         self.pub_gripper = self.create_publisher(JointSingleCommand, '/px100/commands/joint_single', 10)
         self.pub_place_success = self.create_publisher(Bool, '/place/success', 10)
 
+        # 订阅启动话题
+        self.sub_start = self.create_subscription(Bool, '/place/start', self.cb_start, 10)
+
+        # 等待启动信号
+        self.started = False
         # Simple state machine
-        self.state = 'MOVE_OUT'
+        self.state = 'WAITING_START'
         self.wait_ticks = 2  # give some time for publishers to connect
 
         # Timer
         self.timer = self.create_timer(0.5, self.loop)
-        self.get_logger().info('PlaceBoxNode started. Will extend arm and open gripper.')
+        self.get_logger().info('✅ 节点启动: 等待 /place/start 话题中的 True 指令...')
+
+    def cb_start(self, msg: Bool):
+        """接收启动信号"""
+        if msg.data and not self.started:
+            self.get_logger().info('🚀 收到启动信号，开始执行放置任务...')
+            self.started = True
+            # 切换到执行状态
+            self.state = 'MOVE_OUT'
+            self.wait_ticks = 2
 
     def send_arm(self, joints):
         msg = JointGroupCommand()
@@ -47,7 +61,11 @@ class PlaceBoxNode(Node):
             self.wait_ticks -= 1
             return
 
-        if self.state == 'MOVE_OUT':
+        if self.state == 'WAITING_START':
+            # 等待启动信号，不执行任何操作
+            pass
+
+        elif self.state == 'MOVE_OUT':
             # A safe forward "place" pose; gripper level (shoulder+elbow+wrist≈0)
             # [waist, shoulder, elbow, wrist]
             place_pose = [-1.57, -0.4, 1.1, -0.7]
