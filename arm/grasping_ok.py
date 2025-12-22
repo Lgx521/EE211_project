@@ -160,14 +160,14 @@ class ArucoGraspNode(Node):
         
         # 1. 云台转动到30度
         try:
-            cmd = 'ros2 topic pub --once /pan_tilt_cmd_deg pan_tilt_msgs/msg/PanTiltCmdDeg "{yaw: 0.0, pitch: 30.0, speed: 20}"'
+            cmd = 'ros2 topic pub --once /pan_tilt_cmd_deg pan_tilt_msgs/msg/PanTiltCmdDeg "{yaw: 0.0, pitch: 30.0, speed: 10}"'
             subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.get_logger().info("✅ 云台转动命令已发送: pitch=30°")
         except Exception as e:
             self.get_logger().error(f"❌ 云台转动失败: {e}")
         
         # 等待云台转动到位
-        time.sleep(4.0)
+        time.sleep(5.0)
         
         # 2. 启动ArUco检测脚本
         try:

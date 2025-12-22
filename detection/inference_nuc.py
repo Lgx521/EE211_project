@@ -113,6 +113,10 @@ class TrafficLightDetectorOpenVINO(Node):
         # 滤波相关变量
         self.detection_history: Deque[bool] = deque(maxlen=self.filter_window_size)
         self.current_stop_signal = False
+        
+        # 帧跳过机制 - 降低相机订阅频率，避免与SLAM冲突
+        self.frame_skip_counter = 0
+        self.frame_skip_rate = 3  # 只处理每第N帧 (1=处理所有帧, 2=跳过一半, 3=处理1/3)
 
     def _load_openvino_model(self) -> None:
         """加载 OpenVINO 模型"""
@@ -411,6 +415,11 @@ class TrafficLightDetectorOpenVINO(Node):
 
     def image_cb(self, msg: Image) -> None:
         """图像回调函数"""
+        # 帧跳过机制 - 减少处理频率，避免与SLAM争夺相机资源
+        self.frame_skip_counter += 1
+        if self.frame_skip_counter % self.frame_skip_rate != 0:
+            return  # 跳过这一帧
+        
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
         except Exception as e:

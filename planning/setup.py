@@ -12,6 +12,7 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*.launch.py'))),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
     ],
     install_requires=['setuptools'],
@@ -28,6 +29,10 @@ setup(
             'nav1 = nav1:main',
             'nav2 = nav2:main',
             'nav3 = nav3:main',
+            'nav4 = nav4:main',
+            'test_traffic_light = test_traffic_light:main',
+            'test_init_pose = test_init_pose:main',
+            'diagnose_navigation = diagnose_navigation:main',
         ],
     },
 )
