@@ -2,10 +2,11 @@
 
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
 from nav2_msgs.action import NavigateToPose
 from rclpy.action import ActionClient
 from std_msgs.msg import Bool
+import time
 
 class WaypointQuatNavigator(Node):
     def __init__(self):
@@ -22,20 +23,23 @@ class WaypointQuatNavigator(Node):
             10
         )
         
+        # 新增：发布cmd_vel控制机器人移动
+        self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        
         # Subscribers for grasp/place success signals
-        self.grasp_success = False
-        self.place_success = False
+        self.grasp_success_received = False  # MODIFIED: Separate grasp flag
+        self.place_success_received = False  # MODIFIED: Separate place flag
         self.grasp_sub = self.create_subscription(
             Bool,
             '/grasp/success',
             self.grasp_success_callback,
-            10
+            100  # MODIFIED: Larger queue to prevent missed signals
         )
         self.place_sub = self.create_subscription(
             Bool,
             '/place/success',
             self.place_success_callback,
-            10
+            100  # MODIFIED: Larger queue to prevent missed signals
         )
         
         # List of waypoints (x, y, z, w quaternion)
@@ -47,44 +51,88 @@ class WaypointQuatNavigator(Node):
         self.current_goal_handle = None  # Current goal handle (for canceling)
         
         self.current_route = None
+        # 新增：向前移动配置（针对SLAM保护）
+        self.forward_move_distance = 0.3  # 向前移动距离（米）
+        self.forward_move_speed = 0.1     # 向前移动速度（m/s）
+        self.is_moving_forward = False    # 标记是否正在向前移动
 
     def get_waypoints(self):
         """Define navigation waypoints with x, y, z (orientation), w (orientation)"""
         return [
             [6.7132, -2.0496, -0.483441, 0.875377],
-            [6.6120, -2.8236, -0.548580, 0.836098],
-            [7.8208, -4.1773, -0.302368, 0.953191],
-            [10.8847, -2.4878, -0.210088, 0.977683],
-            [9.2475, -0.6691, 0.996305, 0.085884],
+            [6.5974, -2.8870, -0.524038, 0.851695],
+            [8.7445, -4.2035, 0.381371, 0.924422],
+            [10.7641, -2.5770, -0.194092, 0.980983],
+            [9.6205, -1.1276, 0.956089, 0.293078],
             [6.5915, -1.7414, 0.911765, 0.410712]
         ]
     
+    # 新增：直接发布cmd_vel让机器人向前移动指定距离
+    def move_forward_directly(self):
+        """通过cmd_vel直接控制机器人向前移动（规避SLAM保护）"""
+        if self.stop_flag or self.is_moving_forward:
+            return False
+        
+        self.is_moving_forward = True
+        self.get_logger().info(f"Start moving forward {self.forward_move_distance}m via cmd_vel (speed: {self.forward_move_speed}m/s)")
+        
+        # 计算需要移动的时间
+        move_duration = self.forward_move_distance / self.forward_move_speed
+        start_time = time.time()
+        
+        # 构造向前移动的速度指令
+        twist = Twist()
+        twist.linear.x = self.forward_move_speed
+        twist.linear.y = 0.0
+        twist.linear.z = 0.0
+        twist.angular.x = 0.0
+        twist.angular.y = 0.0
+        twist.angular.z = 0.0
+        
+        # 持续发布速度指令直到达到指定距离（此阶段不响应stop_control）
+        while rclpy.ok():
+            # 检查是否移动时间已到
+            elapsed_time = time.time() - start_time
+            if elapsed_time >= move_duration:
+                break
+            
+            # 发布速度指令
+            self.cmd_vel_pub.publish(twist)
+            
+            # 处理ROS回调，但忽略stop_flag
+            rclpy.spin_once(self, timeout_sec=0.01)
+        
+        # 发布停止指令
+        stop_twist = Twist()
+        self.cmd_vel_pub.publish(stop_twist)
+        self.get_logger().info("Stop moving forward, published zero velocity")
+        
+        self.get_logger().info(f"Successfully moved forward {self.forward_move_distance}m")
+        self.is_moving_forward = False
+        return True
+    
     def grasp_success_callback(self, msg):
         """Callback for grasp success signal"""
-        self.grasp_success = msg.data
-        if self.grasp_success:
+        if msg.data:  # MODIFIED: Only set flag on True (ignore False)
+            self.grasp_success_received = True
             self.get_logger().info("Received grasp success signal (/grasp/success=True)")
     
     def place_success_callback(self, msg):
         """Callback for place success signal"""
-        self.place_success = msg.data
-        if self.place_success:
+        if msg.data:  # MODIFIED: Only set flag on True (ignore False)
+            self.place_success_received = True
             self.get_logger().info("Received place success signal (/place/success=True)")
     
     def wait_for_grasp_success(self):
         """Wait until grasp success signal is received"""
         self.get_logger().info("Waiting for grasp success signal (/grasp/success=True)...")
-        self.grasp_success = False  # Reset flag
+        self.grasp_success_received = False  # MODIFIED: Use separate grasp flag
         
-        # Continuously check for grasp success while handling ROS callbacks
-        while rclpy.ok() and not self.grasp_success and not self.stop_flag:
+        # 等待阶段不响应stop_control
+        while rclpy.ok() and not self.grasp_success_received:
             rclpy.spin_once(self, timeout_sec=0.1)
-            if not self.grasp_success:
+            if not self.grasp_success_received:
                 self.get_logger().debug("Still waiting for grasp success...")
-        
-        if self.stop_flag:
-            self.get_logger().info("Navigation stopped while waiting for grasp success")
-            return False
         
         self.get_logger().info("Grasp success received - resuming navigation")
         return True
@@ -92,17 +140,13 @@ class WaypointQuatNavigator(Node):
     def wait_for_place_success(self):
         """Wait until place success signal is received"""
         self.get_logger().info("Waiting for place success signal (/place/success=True)...")
-        self.place_success = False  # Reset flag
+        self.place_success_received = False  # MODIFIED: Use separate place flag
         
-        # Continuously check for place success while handling ROS callbacks
-        while rclpy.ok() and not self.place_success and not self.stop_flag:
+        # 等待阶段不响应stop_control
+        while rclpy.ok() and not self.place_success_received:
             rclpy.spin_once(self, timeout_sec=0.1)
-            if not self.place_success:
+            if not self.place_success_received:
                 self.get_logger().debug("Still waiting for place success...")
-        
-        if self.stop_flag:
-            self.get_logger().info("Navigation stopped while waiting for place success")
-            return False
         
         self.get_logger().info("Place success received - resuming navigation")
         return True
@@ -114,20 +158,25 @@ class WaypointQuatNavigator(Node):
         """
         new_stop_flag = msg.data
         
+        # 核心修改：仅在「nav2正常导航中（goal_in_progress=True）」时响应stop_control
+        if not self.goal_in_progress:
+            self.get_logger().debug(f"Ignore stop_control (not in nav2 navigation): {new_stop_flag}")
+            return
+        
         # Only act on state changes (avoid repeated actions)
         if new_stop_flag != self.stop_flag:
             self.stop_flag = new_stop_flag
             
             if self.stop_flag:
                 self.get_logger().info("Received stop command (stop_control=True), pausing navigation!")
-                # Cancel current navigation goal if it's in progress
-                if self.current_goal_handle and self.goal_in_progress:
+                # 仅取消nav2的当前导航目标（无其他操作）
+                if self.current_goal_handle:
                     self.current_goal_handle.cancel_goal_async()
                     self.get_logger().info(f"Cancelled current goal: waypoint {self.current_goal_idx + 1}")
                     self.goal_in_progress = False  # Mark goal as not in progress (critical fix)
             else:
                 self.get_logger().info("Received resume command (stop_control=False), resuming navigation!")
-                # Resume navigation to the CURRENT waypoint (not next)
+                # 仅恢复nav2导航（无其他操作）
                 if not self.goal_in_progress and self.current_goal_idx < len(self.waypoints):
                     self.send_current_goal()
 
@@ -151,11 +200,11 @@ class WaypointQuatNavigator(Node):
         for _ in range(3):
             self.init_pose_pub.publish(msg)
             self.get_logger().info("Published /initialpose for localization...")
-            rclpy.spin_once(self, timeout_sec=0.5)
+            rclpy.spin_once(self, timeout_sec=1.0)
         
         self.init_sent = True
-        self.get_logger().info("Waiting 1s for AMCL localization to settle...")
-        rclpy.spin_once(self, timeout_sec=1.0)
+        self.get_logger().info("Waiting 5s for AMCL localization to settle...")
+        rclpy.spin_once(self, timeout_sec=5.0)
 
     def send_current_goal(self):
         """Send the CURRENT waypoint goal (not next) to NavigateToPose action server"""
@@ -175,7 +224,7 @@ class WaypointQuatNavigator(Node):
             return
         
         # Check if a goal is already in progress
-        if self.goal_in_progress:
+        if self.goal_in_progress or self.is_moving_forward:
             self.get_logger().warn("A goal is already in progress, skip sending new goal")
             return
         
@@ -242,16 +291,21 @@ class WaypointQuatNavigator(Node):
                 current_goal_number = self.current_goal_idx + 1
                 self.get_logger().info(f"Goal {current_goal_number} reached!")
                 
-                # Check if we need to wait for grasp/place signals
+                # 核心逻辑：第四、第五个点到达后直接发cmd_vel向前移动
                 proceed_to_next = True
-                
-                # Waypoint 4: Wait for grasp success
-                if current_goal_number == 4:
-                    proceed_to_next = self.wait_for_grasp_success()
-                
-                # Waypoint 5: Wait for place success
-                elif current_goal_number == 5:
-                    proceed_to_next = self.wait_for_place_success()
+                if current_goal_number in [4, 5]:
+                    self.get_logger().info(f"Waypoint {current_goal_number} reached, moving forward via cmd_vel (SLAM protection workaround)")
+                    # 直接发布cmd_vel向前移动（此阶段不响应stop_control）
+                    proceed_to_next = self.move_forward_directly()
+                    
+                    # 移动完成后执行原有等待逻辑
+                    if proceed_to_next and not self.stop_flag:
+                        # Waypoint 4: Wait for grasp success
+                        if current_goal_number == 4:
+                            proceed_to_next = self.wait_for_grasp_success()
+                        # Waypoint 5: Wait for place success
+                        elif current_goal_number == 5:
+                            proceed_to_next = self.wait_for_place_success()
                 
                 # Move to next waypoint ONLY if current goal succeeded and we're clear to proceed
                 if proceed_to_next and not self.stop_flag:
@@ -280,6 +334,9 @@ def main(args=None):
     try:
         rclpy.spin(navigator)
     except KeyboardInterrupt:
+        # 新增：键盘中断时发布停止指令
+        stop_twist = Twist()
+        navigator.cmd_vel_pub.publish(stop_twist)
         pass
     
     # Cleanup

@@ -25,6 +25,8 @@ setup(
         'console_scripts': [
             'read_pose = read_pose:main',
             'navigation = navigation:main',
+            'nav1 = nav1:main',
+            'nav2 = nav2:main',
         ],
     },
 )
