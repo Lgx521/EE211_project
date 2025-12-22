@@ -66,7 +66,7 @@ class ArucoGraspNode(Node):
         
         # 高度配置
         self.HOVER_ADD_Z = 0.02
-        self.GRASP_ADD_Z = -0.01
+        self.GRASP_ADD_Z = -0.02
         
         # ArUco检测进程
         self.aruco_process = None
@@ -183,7 +183,7 @@ class ArucoGraspNode(Node):
 
         elif self.state == "PREPARE_GRASP":
             self.get_logger().info("1. 准备：抬起手臂")
-            self.send_gripper(1.5) 
+            self.send_gripper(1.57) 
             self.send_arm([0.0, -0.3, 0.48, 0.0]) 
             self.state = "MOVE_HOVER" 
             self.wait_ticks = 4 
@@ -233,7 +233,7 @@ class ArucoGraspNode(Node):
 
         elif self.state == "CLOSE":
             self.get_logger().info("4. 闭合")
-            self.send_gripper(0.65) 
+            self.send_gripper(0.62) 
             self.state = "RETRACT"
             self.wait_ticks = 3 
 
