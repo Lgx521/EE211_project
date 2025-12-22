@@ -66,7 +66,7 @@ class ArucoGraspNode(Node):
         
         # 高度配置
         self.HOVER_ADD_Z = 0.02
-        self.GRASP_ADD_Z = -0.02 
+        self.GRASP_ADD_Z = -0.01
         
         # ArUco检测进程
         self.aruco_process = None
@@ -108,14 +108,14 @@ class ArucoGraspNode(Node):
         
         # 1. 云台转动到30度
         try:
-            cmd = 'ros2 topic pub --once /pan_tilt_cmd_deg pan_tilt_msgs/msg/PanTiltCmdDeg "{yaw: 0.0, pitch: 30.0, speed: 5}"'
+            cmd = 'ros2 topic pub --once /pan_tilt_cmd_deg pan_tilt_msgs/msg/PanTiltCmdDeg "{yaw: 0.0, pitch: 30.0, speed: 10}"'
             subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.get_logger().info("✅ 云台转动命令已发送: pitch=30°")
         except Exception as e:
             self.get_logger().error(f"❌ 云台转动失败: {e}")
         
         # 等待云台转动到位
-        time.sleep(2.0)
+        time.sleep(5.0)
         
         # 2. 启动ArUco检测脚本
         try:
@@ -136,7 +136,7 @@ class ArucoGraspNode(Node):
             self.get_logger().error(f"❌ ArUco检测启动失败: {e}")
         
         # 等待ArUco检测初始化
-        time.sleep(1.0)
+        time.sleep(2.0)
 
     def cleanup_after_grasp(self):
         """抓取后清理：云台恢复原位并关闭ArUco检测"""
@@ -161,7 +161,7 @@ class ArucoGraspNode(Node):
         
         # 2. 云台恢复到原位（pitch=0）
         try:
-            cmd = 'ros2 topic pub --once /pan_tilt_cmd_deg pan_tilt_msgs/msg/PanTiltCmdDeg "{yaw: 0.0, pitch: 0.0, speed: 5}"'
+            cmd = 'ros2 topic pub --once /pan_tilt_cmd_deg pan_tilt_msgs/msg/PanTiltCmdDeg "{yaw: 0.0, pitch: 0.0, speed: 10}"'
             subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.get_logger().info("✅ 云台恢复命令已发送: pitch=0°")
         except Exception as e:
@@ -184,7 +184,7 @@ class ArucoGraspNode(Node):
         elif self.state == "PREPARE_GRASP":
             self.get_logger().info("1. 准备：抬起手臂")
             self.send_gripper(1.5) 
-            self.send_arm([0.0, -0.6, 1.2, -0.5]) 
+            self.send_arm([0.0, -0.3, 0.48, 0.0]) 
             self.state = "MOVE_HOVER" 
             self.wait_ticks = 4 
 
