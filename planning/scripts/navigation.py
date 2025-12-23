@@ -53,15 +53,6 @@ class WaypointQuatNavigator(Node):
         self.current_goal_handle = None
         self.current_route = None
         
-        # Retry mechanism for rejected goals
-        self.max_retries = 3
-        self.retry_count = 0
-        self.retry_timer = None
-        
-        # Timer for delayed goal sending (to wait for Nav2 initialization)
-        self.delayed_goal_timer = None
-        self.pending_goal_msg = None
-        
         # State machine for handling grasp/place operations
         # States: 'navigating', 'waiting_grasp', 'waiting_place', 'idle', 'traffic_stopped'
         self.state = 'idle'
@@ -86,27 +77,19 @@ class WaypointQuatNavigator(Node):
             self.grasp_success_received = True
             self.get_logger().info("Received grasp success signal (/grasp/success=True)")
             
-            # 情况1：正常等待中
+            # If waiting for grasp, proceed to next waypoint
             if self.state == 'waiting_grasp':
                 self.get_logger().info("Grasp completed, proceeding to next waypoint")
                 self.state = 'idle'
                 self.current_goal_idx += 1
                 self.send_current_goal()
-            
-            # 情况2（新增）：红灯暂停中，但之前的状态是在等待抓取
-            elif self.state == 'traffic_stopped' and self.state_before_traffic_stop == 'waiting_grasp':
-                self.get_logger().info("Grasp completed DURING traffic stop. Will resume to next waypoint when green.")
-                # 修改备份的状态为 idle，这样绿灯亮起恢复状态时，就是 idle 状态
-                self.state_before_traffic_stop = 'idle'
-                # 提前增加索引，以便恢复后直接去下一个点
-                self.current_goal_idx += 1
     
     def place_success_callback(self, msg):
         """Callback for place success signal"""
         if msg.data:
             self.place_success_received = True
             self.get_logger().info("Received place success signal (/place/success=True)")
-    
+            
             # If waiting for place, proceed to next waypoint
             if self.state == 'waiting_place':
                 self.get_logger().info("Place completed, proceeding to next waypoint")
@@ -120,12 +103,12 @@ class WaypointQuatNavigator(Node):
         
         # Detect rising edge (False -> True): Stop signal
         if self.traffic_light_stop and not self.previous_traffic_light_stop:
-            self.get_logger().warn("🚦 RED LIGHT - STOP signal received - cancelling current goal")
+            self.get_logger().warn("[object Object] STOP signal received - cancelling current goal")
             self.handle_traffic_stop()
         
         # Detect falling edge (True -> False): Resume signal
         elif not self.traffic_light_stop and self.previous_traffic_light_stop:
-            self.get_logger().info("🚦 GREEN LIGHT - GO signal received - resuming navigation")
+            self.get_logger().info("🚦 Traffic light GO signal received - resuming navigation")
             self.handle_traffic_resume()
         
         # Update previous state for edge detection
@@ -133,13 +116,13 @@ class WaypointQuatNavigator(Node):
     
     def handle_traffic_stop(self):
         """Handle traffic light stop signal - cancel current navigation goal"""
-        # Save current state before stopping (do this first)
-        self.state_before_traffic_stop = self.state
-        self.state = 'traffic_stopped'
-        
-        # Try to cancel if there's an active goal
-        if self.current_goal_handle is not None:
-            self.get_logger().info(f"Cancelling navigation to waypoint {self.current_goal_idx + 1} (goal_in_progress={self.goal_in_progress})")
+        # Only cancel if there's an active goal
+        if self.goal_in_progress and self.current_goal_handle is not None:
+            self.get_logger().info(f"Cancelling navigation to waypoint {self.current_goal_idx + 1}")
+            
+            # Save current state before stopping
+            self.state_before_traffic_stop = self.state
+            self.state = 'traffic_stopped'
             
             # Cancel the current goal
             try:
@@ -149,68 +132,43 @@ class WaypointQuatNavigator(Node):
                 self.get_logger().error(f"Failed to cancel goal: {str(e)}")
                 self.goal_in_progress = False
                 self.current_goal_handle = None
-        elif self.goal_in_progress:
-            # Goal is in progress but no handle yet (might be in send_pending_goal delay)
-            self.get_logger().warn("Goal in progress but no handle available yet - marking for cancellation")
-            self.goal_in_progress = False
-            # Cancel any pending delayed goal timer
-            if self.delayed_goal_timer is not None:
-                self.delayed_goal_timer.cancel()
-                self.delayed_goal_timer = None
-                self.pending_goal_msg = None
-                self.get_logger().info("Cancelled pending delayed goal")
         else:
-            # No active navigation
+            # No active navigation, just update state
             self.get_logger().info("No active navigation goal to cancel")
+            self.state_before_traffic_stop = self.state
+            self.state = 'traffic_stopped'
     
     def handle_traffic_resume(self):
         """Handle traffic light resume signal - continue to the same waypoint"""
         if self.state == 'traffic_stopped':
-            self.get_logger().info(f"🚦 GREEN LIGHT - Resuming from traffic stop to waypoint {self.current_goal_idx + 1}")
+            self.get_logger().info(f"Resuming navigation to waypoint {self.current_goal_idx + 1}")
             
             # Restore previous state
-            previous_state = self.state_before_traffic_stop if self.state_before_traffic_stop is not None else 'idle'
-            self.state = previous_state
-            self.state_before_traffic_stop = None
-            
-            self.get_logger().info(f"Restored state: {previous_state}")
-            
-            # Reset goal_in_progress flag to ensure we can send a new goal
-            # (it should already be False after cancellation, but just to be safe)
-            if self.goal_in_progress and self.current_goal_handle is None:
-                self.get_logger().warn("goal_in_progress was True but no handle exists, resetting flag")
-                self.goal_in_progress = False
-            
-            # Only resume navigation if we were in a navigating state
-            # Don't resume if we were waiting for grasp/place operations
-            if previous_state in ['idle', 'navigating']:
-                self.get_logger().info("✅ Resuming navigation to the SAME waypoint")
-                self.send_current_goal()
-            elif previous_state == 'waiting_grasp':
-                self.get_logger().info("Was waiting for grasp operation, not resuming navigation")
-            elif previous_state == 'waiting_place':
-                self.get_logger().info("Was waiting for place operation, not resuming navigation")
+            if self.state_before_traffic_stop is not None:
+                self.state = self.state_before_traffic_stop
+                self.state_before_traffic_stop = None
             else:
-                self.get_logger().warn(f"Unknown previous state '{previous_state}', attempting to resume navigation")
-                self.send_current_goal()
+                self.state = 'idle'
+            
+            # Resume navigation to the SAME waypoint (index not changed)
+            self.send_current_goal()
         else:
-            self.get_logger().info(f"Not in traffic_stopped state (current: {self.state}), ignoring resume signal")
+            self.get_logger().info("Not in traffic_stopped state, ignoring resume signal")
     
     def cancel_done_callback(self, future):
         """Callback when goal cancellation is complete"""
         try:
             cancel_response = future.result()
             if len(cancel_response.goals_canceling) > 0:
-                self.get_logger().info("🛑 Goal successfully cancelled - ready for resume")
+                self.get_logger().info("Goal successfully cancelled")
             else:
                 self.get_logger().warn("Goal cancellation may have failed")
         except Exception as e:
             self.get_logger().error(f"Cancel callback error: {str(e)}")
         finally:
-            # Reset goal state to allow new goals to be sent
+            # Reset goal state
             self.goal_in_progress = False
             self.current_goal_handle = None
-            self.get_logger().info(f"Goal state reset: goal_in_progress=False, current_goal_handle=None")
 
     def publish_init_pose(self):
         """Publish initial pose for AMCL localization"""
@@ -249,16 +207,14 @@ class WaypointQuatNavigator(Node):
         msg.pose.pose.orientation.z = z
         msg.pose.pose.orientation.w = w
         
-        # Set covariance matrix (6x6 = 36 elements)
-        # Diagonal elements: x, y, z, rotation_x, rotation_y, rotation_z
-        # Small values indicate high confidence in the initial pose
+        # Set covariance matrix
         msg.pose.covariance = [
             0.25, 0.0, 0.0, 0.0, 0.0, 0.0,  # x variance
             0.0, 0.25, 0.0, 0.0, 0.0, 0.0,  # y variance
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,   # z variance (not used in 2D)
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,   # rotation x (not used in 2D)
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,   # rotation y (not used in 2D)
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.068  # rotation z (yaw) variance
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,   # z variance
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,   # rotation x
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,   # rotation y
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.068  # rotation z
         ]
         
         # Publish initial pose multiple times to ensure reception
@@ -267,20 +223,19 @@ class WaypointQuatNavigator(Node):
             msg.header.stamp = self.get_clock().now().to_msg()  # Update timestamp
             self.init_pose_pub.publish(msg)
             self.get_logger().info(f"Published /initialpose ({i + 1}/5)")
-            rclpy.spin_once(self, timeout_sec=1)
+            rclpy.spin_once(self, timeout_sec=0.5)
         
         self.init_sent = True
-        self.get_logger().info("Waiting 10s for AMCL localization to settle...")
-        self.delayed_goal_timer = self.create_timer(10.0, self.send_pending_goal)
+        self.get_logger().info("Waiting 3s for AMCL localization to settle...")
         
         # Wait for AMCL to process the initial pose
         for i in range(6):
-            rclpy.spin_once(self, timeout_sec=1)
+            rclpy.spin_once(self, timeout_sec=0.5)
         
         self.get_logger().info("Initial pose published successfully!")
 
     def send_current_goal(self):
-        """Send the CURRENT waypoint goal (not next) to NavigateToPose action server"""
+        """Send the CURRENT waypoint goal to NavigateToPose action server"""
         # Publish initial pose if not sent yet
         if not self.init_sent:
             self.publish_init_pose()
@@ -320,52 +275,16 @@ class WaypointQuatNavigator(Node):
         goal_msg.pose = pose
 
         self.get_logger().info(f"Sending goal {self.current_goal_idx + 1}/{len(self.waypoints)}: (x={x:.2f}, y={y:.2f}, z={z:.3f}, w={w:.3f})")
-        
-        # Wait for action server to become available with longer timeout
-        self.get_logger().info("Waiting for Nav2 action server to be ready...")
-        if not self.action_client.wait_for_server(timeout_sec=30.0):
-            self.get_logger().error("NavigateToPose action server not available after 30s!")
+        # Wait for action server to become available
+        if not self.action_client.wait_for_server(timeout_sec=10.0):
+            self.get_logger().error("NavigateToPose action server not available!")
             rclpy.shutdown()
             return
         
-        # Use ROS timer for additional wait to ensure Nav2 is fully initialized
-        # This is better than time.sleep() as it doesn't block the node
-        self.get_logger().info("Nav2 action server detected, waiting 5s for full initialization...")
-        self.pending_goal_msg = goal_msg
         self.goal_in_progress = True
-        
-        # Create a one-shot timer to send goal after 2 seconds
-        self.delayed_goal_timer = self.create_timer(5.0, self.send_pending_goal)
-    
-    def send_pending_goal(self):
-        """Send the pending goal after delay (called by timer)"""
-        if self.delayed_goal_timer is not None:
-            self.delayed_goal_timer.cancel()
-            self.delayed_goal_timer = None
-        
-        if self.pending_goal_msg is None:
-            self.get_logger().error("No pending goal to send!")
-            self.goal_in_progress = False
-            return
-        
-        # Check if traffic light stopped us during the delay
-        if self.state == 'traffic_stopped':
-            self.get_logger().warn("Traffic light is RED, cancelling pending goal")
-            self.pending_goal_msg = None
-            self.goal_in_progress = False
-            return
-        
-        self.get_logger().info("Sending goal now...")
         # Send goal asynchronously
-        self._send_goal_future = self.action_client.send_goal_async(self.pending_goal_msg)
+        self._send_goal_future = self.action_client.send_goal_async(goal_msg)
         self._send_goal_future.add_done_callback(self.goal_response_callback)
-        self.pending_goal_msg = None
-
-    def retry_send_goal(self):
-        """Retry sending the current goal after a delay"""
-        self.get_logger().info(f"Retrying goal {self.current_goal_idx + 1} (attempt {self.retry_count + 1}/{self.max_retries})...")
-        self.goal_in_progress = False
-        self.send_current_goal()
 
     def goal_response_callback(self, future):
         """Callback for goal response from action server"""
@@ -374,42 +293,11 @@ class WaypointQuatNavigator(Node):
             if not goal_handle.accepted:
                 self.get_logger().error(f"Goal {self.current_goal_idx + 1} rejected by server!")
                 self.goal_in_progress = False
-                
-                # Retry mechanism
-                if self.retry_count < self.max_retries:
-                    self.retry_count += 1
-                    self.get_logger().warn(f"Will retry in 3 seconds... (attempt {self.retry_count}/{self.max_retries})")
-                    # Create a timer to retry after 3 seconds
-                    self.retry_timer = self.create_timer(3.0, self.retry_send_goal)
-                else:
-                    self.get_logger().error(f"Goal {self.current_goal_idx + 1} failed after {self.max_retries} attempts. Skipping to next waypoint.")
-                    self.retry_count = 0
-                    self.current_goal_idx += 1
-                    self.send_current_goal()
                 return
 
-            # Goal accepted - reset retry counter
-            self.retry_count = 0
-            if self.retry_timer is not None:
-                self.retry_timer.cancel()
-                self.retry_timer = None
-                
             self.get_logger().info(f"Goal {self.current_goal_idx + 1} accepted by server, navigating...")
             # Save current goal handle
             self.current_goal_handle = goal_handle
-            
-            # Check if traffic light stopped us right after goal was accepted
-            if self.state == 'traffic_stopped':
-                self.get_logger().warn("Traffic light is RED right after goal acceptance, cancelling immediately")
-                try:
-                    cancel_future = goal_handle.cancel_goal_async()
-                    cancel_future.add_done_callback(self.cancel_done_callback)
-                except Exception as e:
-                    self.get_logger().error(f"Failed to cancel goal: {str(e)}")
-                    self.goal_in_progress = False
-                    self.current_goal_handle = None
-                return
-            
             # Register callback for result retrieval
             self._get_result_future = goal_handle.get_result_async()
             self._get_result_future.add_done_callback(self.result_callback)
@@ -424,7 +312,7 @@ class WaypointQuatNavigator(Node):
             self.goal_in_progress = False
             self.current_goal_handle = None
             
-            # Check if the goal was actually achieved (nav2 returns result code 4 for success)
+            # Check if the goal was actually achieved 
             result = future.result()
             if result.status == 4:  # Nav2 SUCCESS status code
                 current_goal_number = self.current_goal_idx + 1
@@ -474,25 +362,14 @@ class WaypointQuatNavigator(Node):
             if self.state != 'traffic_stopped':
                 self.state = 'idle'
 
-    def send_next_goal(self):
-        """Legacy wrapper for initial start (uses send_current_goal)"""
-        self.send_current_goal()
-
 def main(args=None):
-    """Main function to initialize and run the navigator node"""
     rclpy.init(args=args)
     navigator = WaypointQuatNavigator()
-    
-    # Start navigation with first waypoint
-    navigator.send_next_goal()
-    
-    # Keep node spinning
+    navigator.send_current_goal()
     try:
         rclpy.spin(navigator)
     except KeyboardInterrupt:
         pass
-    
-    # Cleanup
     navigator.destroy_node()
     rclpy.shutdown()
 

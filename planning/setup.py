@@ -26,13 +26,8 @@ setup(
         'console_scripts': [
             'read_pose = read_pose:main',
             'navigation = navigation:main',
-            'nav1 = nav1:main',
-            'nav2 = nav2:main',
-            'nav3 = nav3:main',
-            'nav4 = nav4:main',
-            'test_traffic_light = test_traffic_light:main',
-            'test_init_pose = test_init_pose:main',
-            'diagnose_navigation = diagnose_navigation:main',
+            'simple_nav = planning.scripts.simple_nav:main',
+            'stop_at_rviz = planning.scripts.stop_at_rviz:main',
         ],
     },
 )

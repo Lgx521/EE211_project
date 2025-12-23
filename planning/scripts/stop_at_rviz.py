@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
 """
-Nav2 Goal Controller for TurtleBot4 (ROS2 Humble)
-True Persistent Stop/Resume Logic:
-- Hard stop when stop_control = True (no auto-retry, no stuttering)
-- Resume only when stop_control = False (explicit resume)
-- No automatic navigation in stop mode
-- Persistent hold state until resume command
+- Hard stop when stop_control = True
+- Resume only when stop_control = False
 """
 
 import rclpy
@@ -16,7 +12,7 @@ from nav_msgs.msg import Path
 from nav2_msgs.action import NavigateToPose
 from std_msgs.msg import Bool
 
-# Goal status constants (ROS2 Humble compatible)
+# Goal status constants
 GOAL_STATUS_SUCCEEDED = 4
 GOAL_STATUS_CANCELED = 2
 GOAL_STATUS_ABORTED = 5
@@ -27,14 +23,14 @@ class Nav2GoalController(Node):
     def __init__(self):
         super().__init__('nav2_goal_controller')
         
-        # Core state variables (persistent stop/resume)
+        # Core state variables
         self.stop_flag = False                  # Persistent stop state
         self.current_goal_handle = None         # Active goal handle
         self.saved_goal_pose = None             # Persistent goal storage
         self.is_navigating = False              # Navigation state
         self.navigation_held = False            # Flag for held navigation
         
-        # 1. Subscribe to global plan (no auto-execute in stop mode)
+        # 1. Subscribe to global plan
         self.global_plan_sub = self.create_subscription(
             Path,
             '/received_global_plan',
@@ -50,7 +46,7 @@ class Nav2GoalController(Node):
             10
         )
         
-        # 3. Subscribe to stop/resume control (persistent state)
+        # 3. Subscribe to stop/resume control
         self.stop_sub = self.create_subscription(
             Bool,
             'traffic_light/stop_control',
@@ -75,29 +71,21 @@ class Nav2GoalController(Node):
         self.get_logger().info("  - Will stay stopped until explicit resume command")
 
     def global_plan_callback(self, msg: Path):
-        """Update goal but DO NOT auto-execute in stop mode"""
         if len(msg.poses) == 0:
             return
         
-        # Update saved goal (always preserve latest goal)
+        # Update saved goal
         goal_pose_stamped = msg.poses[-1]
         self.saved_goal_pose = goal_pose_stamped
-        
-        # self.get_logger().info("\nUpdated goal from global plan:")
-        # self.get_logger().info(f"   Position: x={goal_pose_stamped.pose.position.x:.2f}, y={goal_pose_stamped.pose.position.y:.2f}")
-        # self.get_logger().info(f"   Frame ID: {msg.header.frame_id}")
-        
-        # ONLY auto-execute if NOT in stop mode and NOT navigating
+
         if not self.stop_flag and not self.is_navigating and not self.navigation_held:
             self.get_logger().info("Auto-executing new goal (stop mode OFF)")
             self.send_nav_goal(goal_pose_stamped)
 
     def goal_pose_callback(self, msg: PoseStamped):
-        """Handle RViz goal - store only (no auto-execute in stop mode)"""
         self.get_logger().info(f"\nReceived new goal from RViz: x={msg.pose.position.x:.2f}, y={msg.pose.position.y:.2f}")
         self.saved_goal_pose = msg
         
-        # ONLY execute immediately if NOT in stop mode
         if not self.stop_flag and not self.is_navigating:
             self.get_logger().info("Executing new RViz goal (stop mode OFF)")
             self.send_nav_goal(msg)
@@ -105,10 +93,9 @@ class Nav2GoalController(Node):
             self.get_logger().info("Goal saved - will execute when resume command received")
 
     def stop_control_callback(self, msg: Bool):
-        """True Persistent Stop/Resume Logic (core fix)"""
         new_stop_flag = msg.data
         
-        # Ignore duplicate commands (prevent multiple triggers)
+        # Ignore duplicate commands
         if new_stop_flag == self.stop_flag:
             return
         
@@ -126,7 +113,7 @@ class Nav2GoalController(Node):
                 self.get_logger().info("Canceling active navigation...")
                 self.current_goal_handle.cancel_goal_async()
             
-            # 2. Force state reset (critical for stop persistence)
+            # 2. Force state reset
             self.is_navigating = False
             self.navigation_held = True
             self.current_goal_handle = None
@@ -153,14 +140,13 @@ class Nav2GoalController(Node):
             self.get_logger().info("✅ System in RESUME state - normal navigation")
 
     def send_nav_goal(self, pose: PoseStamped):
-        """Send goal ONLY if NOT in stop mode (prevent stuttering)"""
-        # HARD CHECK: Do NOT send goal if in stop mode
+        # Do NOT send goal if in stop mode
         if self.stop_flag:
             self.get_logger().warn("⛔ STOP MODE ACTIVE - REJECTING goal send")
             self.navigation_held = True
             return
         
-        # Cancel existing navigation (clean start)
+        # Cancel existing navigation
         if self.current_goal_handle and self.is_navigating:
             self.get_logger().info("Stopping existing navigation for new goal...")
             self.current_goal_handle.cancel_goal_async()
@@ -186,7 +172,6 @@ class Nav2GoalController(Node):
             self.navigation_held = True
 
     def goal_response_callback(self, future):
-        """Handle goal response (stop mode check)"""
         try:
             goal_handle = future.result()
             
@@ -217,7 +202,6 @@ class Nav2GoalController(Node):
             self.navigation_held = True
 
     def goal_result_callback(self, future):
-        """Result handling with stop mode persistence"""
         try:
             result = future.result()
             status_code = result.status
@@ -226,7 +210,7 @@ class Nav2GoalController(Node):
             self.is_navigating = False
             self.current_goal_handle = None
             
-            # Status handling (stop mode aware)
+            # Status handling
             if status_code == GOAL_STATUS_SUCCEEDED:
                 self.get_logger().info("\n🎉 Navigation Completed Successfully")
                 self.get_logger().info(f"Reached goal: x={self.saved_goal_pose.pose.position.x:.2f}, y={self.saved_goal_pose.pose.position.y:.2f}")
@@ -243,7 +227,6 @@ class Nav2GoalController(Node):
                 
             else:
                 self.get_logger().warn(f"\n⚠️ Navigation Failed (Code: {status_code})")
-                # ONLY retry if NOT in stop mode (critical fix)
                 if not self.stop_flag and self.saved_goal_pose and not self.navigation_held:
                     self.get_logger().info("🔄 Auto-retrying navigation (stop mode OFF)")
                     self.send_nav_goal(self.saved_goal_pose)
@@ -256,7 +239,6 @@ class Nav2GoalController(Node):
             self.navigation_held = self.stop_flag  # Match hold state to stop mode
 
 def main(args=None):
-    """Main function with persistent stop/resume logic"""
     rclpy.init(args=args)
     node = Nav2GoalController()
     
