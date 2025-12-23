@@ -19,11 +19,15 @@ EE211_project/
 │   ├── trafficlight_dection.py
 │   ├── ...
 │
-├── my_nav2_planner/    # Custom navigation planner
-│   ├── src/
-│   │   └── nav2_planner.cpp  # Planner implementation
+├── my_nav2_planner/
+│   ├── CMakeLists.txt
+│   ├── package.xml
+│   ├── global_planner_plugin.xml
 │   ├── include/
-│   ├── ...
+│   │   └── my_nav2_planner/
+│   │       └── my_astar_planner.hpp
+│   └── src/
+│       └── my_astar_planner.cpp
 │
 ├── planning/           # Main navigation package
 │   ├── scripts/
@@ -92,4 +96,8 @@ The project was a joint effort by Yiwen Ying, Shengzhe Gan, Zixuan Lv, and Xinxi
 
 <a href="https://github.com/Lgx521">
   <img src="https://avatars.githubusercontent.com/u/148550006?v=4" width="100" />
+</a>
+
+<a href="https://github.com/dxxphy">
+  <img src="https://avatars.githubusercontent.com/u/180681751?v=4" width="100" />
 </a>
