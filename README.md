@@ -87,8 +87,11 @@ python3 ~/ros2_ws/src/EE211_project/planning/scripts/navigation.py
 python3 /home/tony/ros2_ws/src/EE211_project/detection/inference_nuc.py
 ```
 
+### 6. Dataset
+#### We also created a dataset for traffic light and stop sign detection. If you want to get the raw data, please switch to: https://github.com/Lv1321546/Traffic-Light-Dataset-for-SUSTech-EE211.git.
+
 ## Authors
-The project was a joint effort by Yiwen Ying, Shengzhe Gan, Zixuan Lv, and Xinxiang Duan.
+The project was a joint effort by Yiwen Ying, Shengzhe Gan, Zixuan Lyu, and Xinxiang Duan.
 
 <a href="https://github.com/Wendy-Ying">
   <img src="https://avatars.githubusercontent.com/u/143325815?v=4" width="100" />
@@ -102,7 +105,7 @@ The project was a joint effort by Yiwen Ying, Shengzhe Gan, Zixuan Lv, and Xinxi
   <img src="https://github.com/Lv1321546.png"
    width="100" />
   </a> 
-  
+
 <a href="https://github.com/dxxphy">
   <img src="https://avatars.githubusercontent.com/u/180681751?v=4" width="100" />
 </a>
