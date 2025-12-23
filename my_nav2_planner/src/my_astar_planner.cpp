@@ -12,13 +12,13 @@ PLUGINLIB_EXPORT_CLASS(my_nav2_planner::MyAStarPlanner, nav2_core::GlobalPlanner
 namespace my_nav2_planner
 {
 
-// 定义 A* 节点结构
+// A* 节点结构
 struct Node {
     int x, y;
     double g_cost;
     double h_cost;
     double f_cost;
-    int parent_index; // 用于回溯路径
+    int parent_index;
 
     // 优先队列需要重载 > 运算符 (小顶堆)
     bool operator>(const Node& other) const {
@@ -56,7 +56,6 @@ void MyAStarPlanner::cleanup()
 void MyAStarPlanner::activate()
 {
   RCLCPP_INFO(node_->get_logger(), "激活 MyAStarPlanner: %s", name_.c_str());
-  // 这里可以添加发布者等的激活逻辑
 }
 
 void MyAStarPlanner::deactivate()
@@ -64,7 +63,7 @@ void MyAStarPlanner::deactivate()
   RCLCPP_INFO(node_->get_logger(), "停用 MyAStarPlanner: %s", name_.c_str());
 }
 
-// ---------------- 核心算法实现 ----------------
+
 nav_msgs::msg::Path MyAStarPlanner::createPlan(
   const geometry_msgs::msg::PoseStamped & start,
   const geometry_msgs::msg::PoseStamped & goal)
@@ -78,7 +77,7 @@ nav_msgs::msg::Path MyAStarPlanner::createPlan(
     return global_path;
   }
 
-  // 1. 坐标转换 World -> Map
+  // 坐标转换 World -> Map
   unsigned int mx_start, my_start, mx_goal, my_goal;
   if (!costmap_->worldToMap(start.pose.position.x, start.pose.position.y, mx_start, my_start)) {
     RCLCPP_ERROR(node_->get_logger(), "起点在地图外");
@@ -89,7 +88,7 @@ nav_msgs::msg::Path MyAStarPlanner::createPlan(
     return global_path;
   }
 
-  // 2. 初始化数据结构
+  // 初始化数据结构
   int size_x = costmap_->getSizeInCellsX();
   int size_y = costmap_->getSizeInCellsY();
   int map_size = size_x * size_y;
@@ -120,7 +119,8 @@ nav_msgs::msg::Path MyAStarPlanner::createPlan(
 
   open_list.push(start_node);
 
-  // 3. A* 主循环
+  //  A* 主循环：
+    
   // 定义 4 邻域方向 (上、下、左、右)
   const int dx[4] = {0, 0, 1, -1};
   const int dy[4] = {1, -1, 0, 0};
@@ -134,7 +134,7 @@ nav_msgs::msg::Path MyAStarPlanner::createPlan(
 
     int current_index = costmap_->getIndex(current.x, current.y);
 
-    // 如果已经处理过该节点，跳过 (Lazy Deletion)
+    // 如果已经处理过该节点则跳过
     if (visited[current_index]) continue;
     visited[current_index] = true;
 
@@ -175,7 +175,7 @@ nav_msgs::msg::Path MyAStarPlanner::createPlan(
     }
   }
 
-  // 4. 路径回溯
+  // 路径回溯
   if (found_path) {
     std::vector<geometry_msgs::msg::PoseStamped> path_poses;
     int curr = goal_index;
