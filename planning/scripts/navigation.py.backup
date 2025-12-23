@@ -86,20 +86,12 @@ class WaypointQuatNavigator(Node):
             self.grasp_success_received = True
             self.get_logger().info("Received grasp success signal (/grasp/success=True)")
             
-            # 情况1：正常等待中
+            # If waiting for grasp, proceed to next waypoint
             if self.state == 'waiting_grasp':
                 self.get_logger().info("Grasp completed, proceeding to next waypoint")
                 self.state = 'idle'
                 self.current_goal_idx += 1
                 self.send_current_goal()
-            
-            # 情况2（新增）：红灯暂停中，但之前的状态是在等待抓取
-            elif self.state == 'traffic_stopped' and self.state_before_traffic_stop == 'waiting_grasp':
-                self.get_logger().info("Grasp completed DURING traffic stop. Will resume to next waypoint when green.")
-                # 修改备份的状态为 idle，这样绿灯亮起恢复状态时，就是 idle 状态
-                self.state_before_traffic_stop = 'idle'
-                # 提前增加索引，以便恢复后直接去下一个点
-                self.current_goal_idx += 1
     
     def place_success_callback(self, msg):
         """Callback for place success signal"""
@@ -420,12 +412,15 @@ class WaypointQuatNavigator(Node):
     def result_callback(self, future):
         """Callback for navigation result"""
         try:
-            # Reset navigation state
-            self.goal_in_progress = False
-            self.current_goal_handle = None
-            
             # Check if the goal was actually achieved (nav2 returns result code 4 for success)
             result = future.result()
+            self.get_logger().info(f"Result callback: status={result.status}, current_state={self.state}")
+            
+            # Reset navigation state (but preserve traffic_stopped state)
+            if self.state != 'traffic_stopped':
+                self.goal_in_progress = False
+                self.current_goal_handle = None
+            
             if result.status == 4:  # Nav2 SUCCESS status code
                 current_goal_number = self.current_goal_idx + 1
                 self.get_logger().info(f"Goal {current_goal_number} reached!")
@@ -461,17 +456,19 @@ class WaypointQuatNavigator(Node):
                     self.send_current_goal()
             else:
                 # Goal was cancelled or failed
-                self.get_logger().info(f"Goal {self.current_goal_idx + 1} cancelled/interrupted - preserving index")
+                self.get_logger().info(f"Goal {self.current_goal_idx + 1} cancelled/interrupted (status={result.status}) - preserving index")
                 
                 # If not in traffic_stopped state, reset to idle
                 # If in traffic_stopped state, keep that state (will resume later)
                 if self.state != 'traffic_stopped':
                     self.state = 'idle'
+                else:
+                    self.get_logger().info("Keeping traffic_stopped state for later resume")
                 
         except Exception as e:
             self.get_logger().error(f"Result callback error: {str(e)}")
-            self.goal_in_progress = False
             if self.state != 'traffic_stopped':
+                self.goal_in_progress = False
                 self.state = 'idle'
 
     def send_next_goal(self):
