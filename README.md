@@ -15,8 +15,8 @@ EE211_project/
 │   ├── ...
 │
 ├── detection/          # Object detection and traffic light recognition
-│   ├── aruco_detection_node.py
-│   ├── trafficlight_dection.py
+│   ├── inference_nuc.py        # Inference script for NUC
+│   ├── visual_detection_ros.py # Non-aruco marker detection
 │   ├── ...
 │
 ├── my_nav2_planner/
@@ -41,12 +41,12 @@ EE211_project/
 │   ├── map/                # Map files
 │   ├── ...
 │
-├── yolo_detection/     # YOLO detection scripts
-│   ├── collection.py
+├── yolo_detection/     # Collection of YOLO dataset
+│   └── collection.py
 │
 └── yolo_test/          # YOLO test models and results
   ├── yolov8n.pt
-  ├── yolov8n_openvino_model/
+  └── yolov8n_openvino_model/
 ```
 
 ## Common Scripts and Launch Commands
