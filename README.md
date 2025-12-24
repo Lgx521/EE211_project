@@ -65,26 +65,26 @@ ros2 launch iqr_tb4_bringup bringup.launch.py
 
 ### 2. Start Arm Controller
 ```bash
-python3 src/EE211_project/arm/arm_controller.py
+python3 arm/arm_controller.py
 ```
 
 ### 3. Start Grasping/Placing
 ```bash
-python3 src/EE211_project/arm/grasping_ok.py
-python3 src/EE211_project/arm/place_the_box.py
+python3 arm/grasping_ok.py
+python3 arm/place_the_box.py
 ```
 
 ### 4. Navigation Process
 ```bash
-ros2 launch turtlebot4_navigation localization.launch.py map:=/home/tony/ros2_ws/src/EE211_project/planning/map/map.yaml
+ros2 launch turtlebot4_navigation localization.launch.py map:=planning/map/map.yaml
 ros2 launch turtlebot4_navigation nav2.launch.py
 ros2 launch turtlebot4_viz view_robot.launch.py
-python3 ~/ros2_ws/src/EE211_project/planning/scripts/navigation.py
+python3 planning/scripts/navigation.py
 ```
 
 ### 5. Start Traffic Light Detection
 ```bash
-python3 /home/tony/ros2_ws/src/EE211_project/detection/inference_nuc.py
+python3 detection/inference_nuc.py
 ```
 
 ### 6. Dataset
