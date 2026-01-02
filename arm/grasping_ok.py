@@ -23,28 +23,21 @@ class PX100Kinematics:
         self._SE3 = SE3
         self._robot = rtb.models.px100()
         self._ee_index = 11
-        # 保存上一次解，保证下落时姿态连续（保持水平，yaw不跳变）
         self._last_q = None
 
     def solve_ik(self, x, y, z, keep_level=True):
-        # 保持夹爪水平（pitch=0），只约束 XYZ + Ry；yaw/roll 不约束
         pitch = 0.0 if keep_level else 0.0
         T = self._SE3(x, y, z) * self._SE3.Ry(pitch)
         mask = [1, 1, 1, 0, 1, 0]
         
-        # 准备多组初始猜测
         yaw0 = math.atan2(y, x)
         dist = math.sqrt(x**2 + y**2)
         
-        # 根据目标高度和距离，提供更智能的初始猜测
         initial_guesses = []
         
-        # 首选：使用上一次的解（如果存在）
         if self._last_q is not None:
             initial_guesses.append(list(self._last_q))
         
-        # 备选1：基于目标位置的智能猜测
-        # 对于较低的物体，肘部需要更弯曲
         if z < 0.05:  # 物体很低
             initial_guesses.append([yaw0, -0.2, 1.4, -1.2])
         elif z < 0.1:  # 物体中等高度
@@ -52,13 +45,10 @@ class PX100Kinematics:
         else:  # 物体较高
             initial_guesses.append([yaw0, -0.5, 1.0, -0.5])
         
-        # 备选2：标准姿态
         initial_guesses.append([yaw0, -0.5, 1.0, -0.5])
         
-        # 备选3：更激进的姿态（用于极端情况）
         initial_guesses.append([yaw0, 0.0, 1.5, -1.5])
         
-        # 尝试每一组初始猜测
         for i, q0 in enumerate(initial_guesses):
             sol = self._robot.ikine_LM(
                 T, 
@@ -71,11 +61,10 @@ class PX100Kinematics:
             )
             if sol.success:
                 self._last_q = sol.q
-                if i > 0:  # 如果不是第一次尝试就成功了
+                if i > 0: 
                     print(f"✓ IK求解成功（尝试#{i+1}）")
                 return list(sol.q)
         
-        # 所有尝试都失败
         return None
 
 
@@ -125,7 +114,7 @@ class ArucoGraspNode(Node):
             self.state = "SEARCHING"
 
     def cb_poses(self, msg: PoseArray):
-        if not self.started: return  # 未收到启动信号，不处理
+        if not self.started: return  
         if self.state != "SEARCHING": return
         if len(msg.poses) == 0: return
         try:
@@ -171,23 +160,20 @@ class ArucoGraspNode(Node):
         
         # 2. 启动ArUco检测脚本
         try:
-            # 获取当前脚本所在目录的上级目录（项目根目录）
             current_dir = os.path.dirname(os.path.abspath(__file__))
             project_root = os.path.dirname(current_dir)
             aruco_script = os.path.join(project_root, "detection", "aruco_detection_ros.py")
             
-            # 使用subprocess.Popen启动ArUco检测（非阻塞）
             self.aruco_process = subprocess.Popen(
                 ["python3", aruco_script],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                preexec_fn=os.setsid  # 创建新的进程组，便于后续终止
+                preexec_fn=os.setsid  
             )
             self.get_logger().info(f"✅ ArUco检测已启动 (PID: {self.aruco_process.pid})")
         except Exception as e:
             self.get_logger().error(f"❌ ArUco检测启动失败: {e}")
         
-        # 等待ArUco检测初始化
         time.sleep(2.0)
 
     def cleanup_after_grasp(self):
@@ -197,14 +183,12 @@ class ArucoGraspNode(Node):
         # 1. 关闭ArUco检测进程
         if self.aruco_process is not None:
             try:
-                # 终止整个进程组
                 os.killpg(os.getpgid(self.aruco_process.pid), signal.SIGTERM)
                 self.aruco_process.wait(timeout=3.0)
                 self.get_logger().info("✅ ArUco检测已关闭")
             except Exception as e:
                 self.get_logger().warn(f"⚠️ ArUco检测关闭异常: {e}")
                 try:
-                    # 强制终止
                     os.killpg(os.getpgid(self.aruco_process.pid), signal.SIGKILL)
                 except:
                     pass
@@ -313,10 +297,8 @@ def main():
     rclpy.init()
     node = ArucoGraspNode()
     
-    # 运行主程序（等待 /grasp/start 话题）
     rclpy.spin(node)
     
-    # 清理资源
     node.destroy_node()
     rclpy.shutdown()
 
