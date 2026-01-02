@@ -7,11 +7,12 @@ EE211_project/
 │
 ├── arm/                # Robotic arm control and grasping scripts
 │   ├── arm_controller.py
-│   ├── grasping.py
+│   ├── grasping_ok.py
+│   ├── place_the_box.py
 │   ├── ...
 │
-├── aruco_tracker/      # ArUco marker detection and tracking module
-│   ├── aruco_node.py
+├── aruco_tracker/      # ArUco marker detection and marker position publication module
+│   ├── aruco_detection_ros.py
 │   ├── ...
 │
 ├── detection/          # Object detection and traffic light recognition
